@@ -78,3 +78,11 @@ ExitPanel 是一个面向单管理员、单台 Linux VPS 的出口代理管理�
 - `server/routers.ts`：受保护管理 API。
 - `public/manus-routes.json`：页面路由清单。
 - 后续 `vps/`：root 安装器与 systemd/Xray 接入，不在本阶段实现。
+
+## 第二阶段：控制面与数据面
+- 公开订阅接口使用随机 token，返回 VLESS Base64 或 JSON 兼容的 Clash/Mihomo 配置；不依赖管理员 Cookie。
+- VPS worker 使用 `X-ExitPanel-Timestamp` + `X-ExitPanel-Signature` 的 HMAC-SHA256 认证，时间窗口默认 90 秒。
+- worker 的 Xray 应用路径为临时文件 → root helper → JSON/Xray 校验 → 备份 → 原子替换 → systemd reload；任何校验或 reload 失败都恢复备份。
+- REALITY 私钥只在 VPS `/etc/exitpanel/agent.env`，面板只下发节点 UUID、端口和上游出口配置。
+- `nodes` 表保存多台 VPS 或落地节点，`tunnelMode=reverse` 表示入口通过预先配置的反向 SSH/中继到达 VPS；`reverse-tunnel.service.example` 只提供模板，不自动开放公网端口。
+- `exits.nodeId` 将出口归属到节点，节点 apply API 只生成并下发该节点的有效出口计划。

@@ -3,13 +3,15 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
 import { getSessionCookieOptions } from "./_core/cookies";
-import { createExit, deleteExit, getExit, listChecks, listEvents, listExits, setExitCheck, updateExit, type SafeExit } from "./db";
+import { createExit, createNode, deleteExit, deleteNode, ensureSubscriptionToken, getExit, getNode, getNodeSecret, listChecks, listEvents, listExitPlans, listExits, listNodes, setExitCheck, updateExit, updateNode, type SafeExit } from "./db";
 import { makeSubscription } from "./subscriptions";
+import { applyWorkerXray, workerHealth } from "./workerClient";
 
 const port = z.coerce.number().int().min(1).max(65535);
 const dateInput = z.string().datetime().nullable().optional();
 
 const exitInput = z.object({
+  nodeId: z.string().nullable().optional(),
   type: z.enum(["direct", "socks5"]).default("socks5"),
   displayName: z.string().trim().min(1).max(160),
   providerName: z.string().trim().max(120).optional(),
@@ -58,6 +60,14 @@ function simulatedResult(exit: Pick<SafeExit, "displayName" | "expectedCountry" 
 export const appRouter = router({
   system: router({
     health: publicProcedure.query(() => ({ ok: true, mode: "preview-mock" as const })),
+    worker: adminProcedure.query(async () => {
+      try {
+        const result = await workerHealth();
+        return { configured: true, reachable: Boolean(result.ok), detail: result.capabilities?.join(", ") || result.service };
+      } catch (error) {
+        return { configured: Boolean(process.env.EXITPANEL_WORKER_URL && process.env.EXITPANEL_WORKER_SHARED_SECRET), reachable: false, detail: error instanceof Error ? error.message : "worker_unavailable" };
+      }
+    }),
   }),
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
@@ -117,9 +127,32 @@ export const appRouter = router({
     }),
   }),
   subscriptions: router({
+    links: adminProcedure.query(async ({ ctx }) => {
+      const token = await ensureSubscriptionToken(ctx.user.id);
+      return {
+        base64: `/api/subscription/${token}`,
+        clash: `/api/subscription/${token}?format=clash`,
+      };
+    }),
     preview: adminProcedure.query(async () => {
       const rows = await listExits();
       return makeSubscription(rows as SafeExit[] as any);
+    }),
+  }),
+  nodes: router({
+    list: adminProcedure.query(() => listNodes()),
+    create: adminProcedure.input(z.object({ displayName: z.string().trim().min(1).max(120), endpoint: z.string().trim().min(1).max(255), agentPort: port.default(18443), tunnelMode: z.enum(["direct", "reverse"]).default("direct"), publicEntryHost: z.string().trim().max(255).optional(), sharedSecret: z.string().min(32).max(160).optional() })).mutation(async ({ input }) => ({ id: await createNode(input) })),
+    update: adminProcedure.input(z.object({ id: z.string(), data: z.object({ displayName: z.string().trim().min(1).max(120).optional(), endpoint: z.string().trim().min(1).max(255).optional(), agentPort: port.optional(), tunnelMode: z.enum(["direct", "reverse"]).optional(), publicEntryHost: z.string().trim().max(255).optional(), sharedSecret: z.string().min(32).max(160).optional(), status: z.string().max(24).optional() }) })).mutation(async ({ input }) => { await updateNode(input.id, input.data); return { ok: true }; }),
+    remove: adminProcedure.input(z.object({ id: z.string() })).mutation(async ({ input }) => { await deleteNode(input.id); return { ok: true }; }),
+    applyConfig: adminProcedure.input(z.object({ id: z.string() })).mutation(async ({ input }) => {
+      const node = await getNode(input.id);
+      if (!node) throw new TRPCError({ code: "NOT_FOUND", message: "VPS 节点不存在" });
+      const secret = node.sharedSecretEncrypted ? await getNodeSecret(input.id) : undefined;
+      if (!secret) throw new TRPCError({ code: "BAD_REQUEST", message: "该节点没有配置 worker 共享密钥" });
+      const baseUrl = /^https?:\/\//.test(node.endpoint) ? node.endpoint : `http://${node.endpoint}:${node.agentPort}`;
+      const result = await applyWorkerXray({ baseUrl: baseUrl.replace(/\/$/, ""), secret }, await listExitPlans(input.id));
+      await updateNode(input.id, { status: result.status === "applied" ? "online" : "error" });
+      return { ...result, nodeId: input.id };
     }),
   }),
 });

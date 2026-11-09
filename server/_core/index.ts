@@ -7,6 +7,8 @@ import { publicPlatformScript } from "./publicConfig";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { getUserBySubscriptionToken, listExits } from "../db";
+import { makeSubscription } from "../subscriptions";
 
 async function startServer() {
   const app = express();
@@ -17,6 +19,17 @@ async function startServer() {
   app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
   app.get("/api/platform/config.js", (_req, res) => {
     res.set("Cache-Control", "no-store").type("application/javascript").send(publicPlatformScript());
+  });
+  app.get("/api/subscription/:token", async (req, res) => {
+    const token = String(req.params.token || "");
+    if (!/^sub_[A-Za-z0-9_-]{20,80}$/.test(token)) return res.status(404).json({ error: "not_found" });
+    const owner = await getUserBySubscriptionToken(token);
+    if (!owner) return res.status(404).json({ error: "not_found" });
+    const rows = await listExits();
+    const subscription = makeSubscription(rows as any);
+    res.set("Cache-Control", "no-store");
+    if (req.query.format === "clash") return res.type("application/json").send(JSON.stringify(subscription.clash, null, 2));
+    return res.type("text/plain").send(subscription.base64);
   });
   registerOAuthRoutes(app);
   // tRPC API

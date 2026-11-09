@@ -7,6 +7,8 @@ INSTALL_DIR="/opt/exitpanel-agent"
 CONFIG_DIR="/etc/exitpanel"
 ENV_FILE="$CONFIG_DIR/agent.env"
 SERVICE_FILE="/etc/systemd/system/$APP_NAME.service"
+SUDOERS_FILE="/etc/sudoers.d/$APP_NAME"
+APPLY_HELPER="/usr/local/sbin/exitpanel-apply"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 [[ "$(id -u)" == "0" ]] || { echo "请以 root 执行：sudo bash vps/install.sh" >&2; exit 1; }
@@ -27,20 +29,37 @@ fi
 id -u "$APP_NAME" >/dev/null 2>&1 || useradd --system --home-dir "$INSTALL_DIR" --create-home --shell /usr/sbin/nologin "$APP_NAME"
 install -d -o root -g root -m 0755 "$INSTALL_DIR"
 install -d -o root -g root -m 0700 "$CONFIG_DIR"
+install -d -o "$APP_NAME" -g "$APP_NAME" -m 0700 /run/exitpanel-agent
 install -o root -g root -m 0755 "$SCRIPT_DIR/agent.py" "$INSTALL_DIR/agent.py"
+install -o root -g root -m 0644 "$SCRIPT_DIR/xray_config.py" "$INSTALL_DIR/xray_config.py"
+install -o root -g root -m 0700 "$SCRIPT_DIR/exitpanel-apply" "$APPLY_HELPER"
+
+cat >"$SUDOERS_FILE" <<EOF
+$APP_NAME ALL=(root) NOPASSWD: $APPLY_HELPER
+EOF
+chmod 0440 "$SUDOERS_FILE"
+visudo -cf "$SUDOERS_FILE" >/dev/null
 
 if [[ ! -s "$ENV_FILE" ]]; then
-  token="$(openssl rand -hex 32)"
+  shared_secret="$(openssl rand -hex 32)"
   cat >"$ENV_FILE" <<EOF
 AGENT_HOST=127.0.0.1
 AGENT_PORT=18443
-AGENT_TOKEN=$token
+AGENT_SHARED_SECRET=$shared_secret
+AGENT_RUN_DIR=/run/exitpanel-agent
+# Configure these before applying a REALITY config.
+REALITY_SERVER_NAME=www.microsoft.com
+REALITY_DEST=www.microsoft.com:443
+REALITY_PRIVATE_KEY=
 EOF
   chmod 0600 "$ENV_FILE"
-  echo "已生成新的检测服务 token：$ENV_FILE"
+  echo "已生成新的 HMAC 密钥：$ENV_FILE"
 else
   chmod 0600 "$ENV_FILE"
-  echo "保留现有检测服务 token：$ENV_FILE"
+  if ! grep -q '^AGENT_SHARED_SECRET=' "$ENV_FILE"; then
+    printf '\nAGENT_SHARED_SECRET=%s\n' "$(openssl rand -hex 32)" >>"$ENV_FILE"
+  fi
+  echo "保留现有检测服务配置：$ENV_FILE"
 fi
 
 cat >"$SERVICE_FILE" <<EOF
@@ -56,13 +75,15 @@ Group=$APP_NAME
 EnvironmentFile=$ENV_FILE
 WorkingDirectory=$INSTALL_DIR
 ExecStart=/usr/bin/python3 $INSTALL_DIR/agent.py
+RuntimeDirectory=exitpanel-agent
+RuntimeDirectoryMode=0700
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/run
+ReadWritePaths=/run/exitpanel-agent
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
@@ -81,5 +102,8 @@ else
   exit 1
 fi
 
-echo "后续面板接入时使用：POST http://127.0.0.1:18443/v1/check"
-echo "认证头：X-ExitPanel-Token；token 保存在：$ENV_FILE"
+echo "检测接口：POST http://127.0.0.1:18443/v1/check"
+echo "配置接口：POST http://127.0.0.1:18443/v1/config/apply"
+echo "认证方式：X-ExitPanel-Timestamp + X-ExitPanel-Signature（HMAC-SHA256）"
+echo "共享密钥文件：$ENV_FILE"
+echo "REALITY_PRIVATE_KEY 尚未自动生成，请配置后再应用真实入站。"

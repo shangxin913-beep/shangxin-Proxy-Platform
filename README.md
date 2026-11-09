@@ -56,3 +56,10 @@ sudo bash vps/install.sh
 ## 许可
 
 首版项目代码按 MIT 许可保留模板默认设置；如后续直接复用 GPL 项目代码，应按对应上游许可证重新处理。
+
+
+## 第二阶段新增
+
+第二阶段加入了带时间戳的 HMAC worker 通信、公开 token 订阅 URL、VLESS/REALITY + SOCKS5 的 Xray 配置生成器、root helper 的原子应用与回滚、多 VPS 节点模型、节点到出口绑定，以及 direct/reverse 隧道模式。
+
+worker 不会在浏览器返回 SOCKS5 密码或 REALITY 私钥。真实 Xray 启用前，需要在目标 VPS 安装 Xray、配置 `REALITY_PRIVATE_KEY`、配置 DNS/防火墙，并由管理员审查 `reverse-tunnel.service.example` 的中继和端口策略。

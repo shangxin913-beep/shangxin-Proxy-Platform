@@ -7,6 +7,7 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: varchar("role", { length: 16 }).default("user").notNull(),
+  subscriptionToken: varchar("subscriptionToken", { length: 96 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -14,6 +15,7 @@ export const users = mysqlTable("users", {
 
 export const exits = mysqlTable("exits", {
   id: varchar("id", { length: 32 }).primaryKey(),
+  nodeId: varchar("nodeId", { length: 32 }),
   type: varchar("type", { length: 24 }).notNull(),
   displayName: varchar("displayName", { length: 160 }).notNull(),
   providerName: varchar("providerName", { length: 120 }),
@@ -64,9 +66,25 @@ export const statusEvents = mysqlTable("statusEvents", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+export const nodes = mysqlTable("nodes", {
+  id: varchar("id", { length: 32 }).primaryKey(),
+  displayName: varchar("displayName", { length: 120 }).notNull(),
+  kind: varchar("kind", { length: 24 }).default("vps").notNull(),
+  endpoint: varchar("endpoint", { length: 255 }).notNull(),
+  agentPort: int("agentPort").default(18443).notNull(),
+  tunnelMode: varchar("tunnelMode", { length: 24 }).default("direct").notNull(),
+  publicEntryHost: varchar("publicEntryHost", { length: 255 }),
+  status: varchar("status", { length: 24 }).default("unknown").notNull(),
+  sharedSecretEncrypted: text("sharedSecretEncrypted"),
+  lastSeenAt: timestamp("lastSeenAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Exit = typeof exits.$inferSelect;
 export type InsertExit = typeof exits.$inferInsert;
 export type CheckRecord = typeof checkRecords.$inferSelect;
 export type StatusEvent = typeof statusEvents.$inferSelect;
+export type Node = typeof nodes.$inferSelect;

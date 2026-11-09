@@ -1,0 +1,27 @@
+[Unit]
+Description=ExitPanel reverse tunnel for a landing node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=exitpanel-agent
+EnvironmentFile=/etc/exitpanel/reverse-tunnel.env
+ExecStart=/usr/bin/ssh -NT \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o StrictHostKeyChecking=yes \
+  -i ${SSH_IDENTITY_FILE} \
+  -R ${REMOTE_BIND}:${REMOTE_PORT}:127.0.0.1:${LOCAL_PORT} \
+  ${RELAY_USER}@${RELAY_HOST}
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/exitpanel-agent
+
+[Install]
+WantedBy=multi-user.target

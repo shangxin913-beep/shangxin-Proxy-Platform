@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -7,11 +9,14 @@ import subprocess
 import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+
+from xray_config import build_config
 
 HOST = os.environ.get("AGENT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AGENT_PORT", "18443"))
-TOKEN = os.environ.get("AGENT_TOKEN", "")
+SHARED_SECRET = os.environ.get("AGENT_SHARED_SECRET", "")
+RUN_DIR = os.environ.get("AGENT_RUN_DIR", "/run/exitpanel-agent")
+MAX_CLOCK_SKEW = 90
 
 
 def json_response(handler, status, payload):
@@ -30,6 +35,21 @@ def valid_host(value):
     return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.:-]*", value))
 
 
+def verify_request(handler, body):
+    if not SHARED_SECRET:
+        return False
+    try:
+        timestamp = int(handler.headers.get("X-ExitPanel-Timestamp", "0"))
+    except ValueError:
+        return False
+    if abs(int(time.time()) - timestamp) > MAX_CLOCK_SKEW:
+        return False
+    provided = handler.headers.get("X-ExitPanel-Signature", "")
+    message = f"{timestamp}\n".encode() + body
+    expected = hmac.new(SHARED_SECRET.encode(), message, hashlib.sha256).hexdigest()
+    return bool(provided) and hmac.compare_digest(provided, expected)
+
+
 def check_socks5(payload):
     host = payload.get("host")
     port = payload.get("port")
@@ -40,13 +60,7 @@ def check_socks5(payload):
     if len(username) > 160 or len(password) > 300:
         raise ValueError("credential_too_long")
 
-    command = [
-        "curl", "--fail", "--silent", "--show-error", "--location",
-        "--connect-timeout", "8", "--max-time", "20",
-        "--proxy", f"socks5h://{host}:{port}",
-        "--header", "Accept: application/json",
-        "https://ipinfo.io/json",
-    ]
+    command = ["curl", "--fail", "--silent", "--show-error", "--location", "--connect-timeout", "8", "--max-time", "20", "--proxy", f"socks5h://{host}:{port}", "--header", "Accept: application/json", "https://ipinfo.io/json"]
     config_path = None
     started = time.perf_counter()
     try:
@@ -58,7 +72,6 @@ def check_socks5(payload):
             config_file.close()
             os.chmod(config_path, 0o600)
             command[1:1] = ["--config", config_path]
-
         try:
             completed = subprocess.run(command, capture_output=True, text=True, timeout=25, check=True)
         except subprocess.CalledProcessError as exc:
@@ -66,22 +79,14 @@ def check_socks5(payload):
             return {"status": "failed", "errorCode": "proxy_check_failed", "errorMessage": message, "latencyMs": round((time.perf_counter() - started) * 1000)}
         except subprocess.TimeoutExpired:
             return {"status": "failed", "errorCode": "proxy_timeout", "errorMessage": "SOCKS5 检测超时", "latencyMs": 25000}
-
         try:
             result = json.loads(completed.stdout)
         except json.JSONDecodeError:
             return {"status": "failed", "errorCode": "invalid_probe_response", "errorMessage": "出口探测返回不是 JSON", "latencyMs": round((time.perf_counter() - started) * 1000)}
-
         observed_ip = result.get("ip")
         if not isinstance(observed_ip, str) or not observed_ip:
             return {"status": "failed", "errorCode": "missing_exit_ip", "errorMessage": "出口探测没有返回 IP", "latencyMs": round((time.perf_counter() - started) * 1000)}
-        return {
-            "status": "passed",
-            "observedIp": observed_ip,
-            "country": result.get("country"),
-            "city": result.get("city"),
-            "latencyMs": round((time.perf_counter() - started) * 1000),
-        }
+        return {"status": "passed", "observedIp": observed_ip, "country": result.get("country"), "city": result.get("city"), "latencyMs": round((time.perf_counter() - started) * 1000)}
     finally:
         if config_path:
             try:
@@ -90,39 +95,66 @@ def check_socks5(payload):
                 pass
 
 
+def apply_xray(entries):
+    if not isinstance(entries, list) or len(entries) > 200:
+        raise ValueError("invalid_entries")
+    config = build_config(entries)
+    encoded = json.dumps(config, ensure_ascii=False, sort_keys=True, indent=2).encode()
+    os.makedirs(RUN_DIR, mode=0o700, exist_ok=True)
+    staged = os.path.join(RUN_DIR, "xray-next.json")
+    with open(staged, "wb") as handle:
+        handle.write(encoded)
+    os.chmod(staged, 0o600)
+    try:
+        result = subprocess.run(["sudo", "-n", "/usr/local/sbin/exitpanel-apply"], capture_output=True, text=True, timeout=30, check=False)
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout or "xray_apply_failed").strip()[:240]
+            return {"status": "rolled_back", "errorCode": "xray_apply_failed", "errorMessage": message}
+        return {"status": "applied", "sha256": hashlib.sha256(encoded).hexdigest(), "detail": (result.stdout or "").strip()[:240]}
+    finally:
+        try:
+            os.unlink(staged)
+        except FileNotFoundError:
+            pass
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ExitPanelAgent/0.1"
+    server_version = "ExitPanelAgent/0.2"
 
     def log_message(self, format, *args):
         return
 
     def do_GET(self):
         if self.path == "/health":
-            json_response(self, 200, {"ok": True, "service": "exitpanel-agent", "mode": "socks5-check"})
+            json_response(self, 200, {"ok": True, "service": "exitpanel-agent", "capabilities": ["socks5-check", "xray-atomic-apply", "rollback"]})
             return
         json_response(self, 404, {"error": "not_found"})
 
     def do_POST(self):
-        if self.path != "/v1/check":
+        if self.path not in ("/v1/check", "/v1/config/apply"):
             json_response(self, 404, {"error": "not_found"})
-            return
-        if not TOKEN or not secrets.compare_digest(self.headers.get("X-ExitPanel-Token", ""), TOKEN):
-            json_response(self, 401, {"error": "unauthorized"})
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length <= 0 or length > 8192:
+            if length <= 0 or length > 512 * 1024:
                 raise ValueError("invalid_body_size")
-            payload = json.loads(self.rfile.read(length))
-            result = check_socks5(payload)
+            body = self.rfile.read(length)
+            if not verify_request(self, body):
+                json_response(self, 401, {"error": "unauthorized"})
+                return
+            payload = json.loads(body)
+            if self.path == "/v1/check":
+                result = check_socks5(payload)
+            else:
+                result = apply_xray(payload.get("entries", []))
             json_response(self, 200, result)
         except (ValueError, json.JSONDecodeError) as exc:
-            json_response(self, 400, {"status": "failed", "errorCode": str(exc), "errorMessage": "检测参数无效"})
+            json_response(self, 400, {"status": "failed", "errorCode": str(exc), "errorMessage": "请求参数无效"})
         except Exception:
             json_response(self, 500, {"status": "failed", "errorCode": "agent_error", "errorMessage": "检测服务内部错误"})
 
 
 if __name__ == "__main__":
-    if not TOKEN:
-        raise SystemExit("AGENT_TOKEN is required")
+    if not SHARED_SECRET:
+        raise SystemExit("AGENT_SHARED_SECRET is required")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

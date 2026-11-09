@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+STAGED="/run/exitpanel-agent/xray-next.json"
+TARGET_DIR="/etc/exitpanel/xray"
+TARGET="$TARGET_DIR/config.json"
+BACKUP="$TARGET_DIR/config.json.bak"
+TMP="$TARGET_DIR/config.json.tmp"
+XRAY_BIN=""
+for candidate in /usr/local/bin/xray /usr/bin/xray; do
+  if [[ -x "$candidate" ]]; then XRAY_BIN="$candidate"; break; fi
+done
+
+[[ "$(id -u)" == "0" ]] || { echo "must run as root" >&2; exit 1; }
+[[ -s "$STAGED" ]] || { echo "staged config missing" >&2; exit 1; }
+install -d -o root -g root -m 0700 "$TARGET_DIR"
+python3 -m json.tool "$STAGED" >/dev/null
+install -o root -g root -m 0600 "$STAGED" "$TMP"
+
+if [[ -n "$XRAY_BIN" ]]; then
+  "$XRAY_BIN" run -test -config "$TMP" >/tmp/exitpanel-xray-test.log 2>&1 || {
+    rm -f "$TMP"
+    echo "xray config validation failed" >&2
+    sed -n '1,30p' /tmp/exitpanel-xray-test.log >&2 || true
+    exit 1
+  }
+fi
+
+if [[ -f "$TARGET" ]]; then cp -a "$TARGET" "$BACKUP"; fi
+mv -f "$TMP" "$TARGET"
+
+if [[ -n "$XRAY_BIN" ]] && systemctl is-active --quiet xray.service; then
+  if ! systemctl reload xray.service; then
+    [[ -f "$BACKUP" ]] && cp -a "$BACKUP" "$TARGET"
+    systemctl restart xray.service || true
+    echo "xray reload failed; previous config restored" >&2
+    exit 1
+  fi
+  echo "xray config applied and service reloaded"
+else
+  echo "config stored; xray binary/service is not active yet"
+fi
