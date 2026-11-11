@@ -54,7 +54,8 @@ if [[ -n "$DOMAIN" ]] && [[ ! "$DOMAIN" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]
 fi
 
 prompt_value() {
-  local name="$1" label="$2" current="${!name:-}"
+  local name="$1" label="$2" current=""
+  if [[ -n "${!name+x}" ]]; then current="${!name}"; fi
   if [[ -z "$current" ]]; then
     read -r -p "$label: " current
     [[ -n "$current" ]] || die "$label 不能为空"
@@ -63,7 +64,8 @@ prompt_value() {
 }
 
 prompt_secret() {
-  local name="$1" label="$2" current="${!name:-}"
+  local name="$1" label="$2" current=""
+  if [[ -n "${!name+x}" ]]; then current="${!name}"; fi
   if [[ -z "$current" ]]; then
     read -r -s -p "$label: " current
     printf '\n'
