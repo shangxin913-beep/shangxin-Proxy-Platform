@@ -56,7 +56,7 @@ curl -sS http://127.0.0.1:18443/v1/check \
 
 ## Xray 配置应用
 
-安装器会部署 `/usr/local/sbin/exitpanel-apply`。worker 收到 `/v1/config/apply` 后先在 `/run/exitpanel-agent/xray-next.json` 写入临时配置，再由 root helper 做 JSON/Xray 校验、备份当前配置、原子替换、systemd reload；校验或 reload 失败会恢复 `.bak` 并重启旧配置。安装器不会自动下载 Xray 二进制，也不会自动生成 REALITY 私钥，需先安装并配置：
+安装器会部署 `/usr/local/sbin/exitpanel-apply`。worker 收到 `/v1/config/apply` 后先在 `/run/exitpanel-agent/xray-next.json` 写入临时配置，再由 root helper 做 JSON/Xray 校验、备份当前配置、原子替换、systemd reload；校验或 reload 失败会恢复 `.bak` 并重启旧配置。有效计划会保存到 `/var/lib/exitpanel-agent/plan.json`，worker 每 30 秒本地清理已到期入口并重新应用配置，因此面板暂时不可用时也能阻断已经下发的过期入口。安装器不会自动下载 Xray 二进制，也不会自动生成 REALITY 私钥，需先安装并配置：
 
 ```text
 /usr/local/bin/xray

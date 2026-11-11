@@ -98,6 +98,7 @@ export async function listExitPlans(nodeId: string) {
     displayName: exit.displayName,
     entryPort: exit.entryPort,
     entryUuid: exit.entryUuid,
+    expiresAt: exit.expiresAt ? exit.expiresAt.toISOString() : null,
     upstream: exit.type === "direct" ? { type: "direct" as const } : { type: "socks5" as const, host: exit.upstreamHost || "", port: exit.upstreamPort || 0, username: exit.username || "", password: exit.passwordEncrypted ? decryptSecret(exit.passwordEncrypted) : "" },
   })));
 }

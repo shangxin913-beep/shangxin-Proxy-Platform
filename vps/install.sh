@@ -30,6 +30,7 @@ id -u "$APP_NAME" >/dev/null 2>&1 || useradd --system --home-dir "$INSTALL_DIR" 
 install -d -o root -g root -m 0755 "$INSTALL_DIR"
 install -d -o root -g root -m 0700 "$CONFIG_DIR"
 install -d -o "$APP_NAME" -g "$APP_NAME" -m 0700 /run/exitpanel-agent
+install -d -o "$APP_NAME" -g "$APP_NAME" -m 0700 /var/lib/exitpanel-agent
 install -o root -g root -m 0755 "$SCRIPT_DIR/agent.py" "$INSTALL_DIR/agent.py"
 install -o root -g root -m 0644 "$SCRIPT_DIR/xray_config.py" "$INSTALL_DIR/xray_config.py"
 install -o root -g root -m 0700 "$SCRIPT_DIR/exitpanel-apply" "$APPLY_HELPER"
@@ -47,6 +48,7 @@ AGENT_HOST=127.0.0.1
 AGENT_PORT=18443
 AGENT_SHARED_SECRET=$shared_secret
 AGENT_RUN_DIR=/run/exitpanel-agent
+AGENT_PLAN_FILE=/var/lib/exitpanel-agent/plan.json
 # Configure these before applying a REALITY config.
 REALITY_SERVER_NAME=www.microsoft.com
 REALITY_DEST=www.microsoft.com:443

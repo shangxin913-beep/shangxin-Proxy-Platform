@@ -7,7 +7,9 @@ import re
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from xray_config import build_config
@@ -16,6 +18,7 @@ HOST = os.environ.get("AGENT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AGENT_PORT", "18443"))
 SHARED_SECRET = os.environ.get("AGENT_SHARED_SECRET", "")
 RUN_DIR = os.environ.get("AGENT_RUN_DIR", "/run/exitpanel-agent")
+PLAN_FILE = os.environ.get("AGENT_PLAN_FILE", "/var/lib/exitpanel-agent/plan.json")
 MAX_CLOCK_SKEW = 90
 
 
@@ -95,10 +98,27 @@ def check_socks5(payload):
                 pass
 
 
-def apply_xray(entries):
+def active_entries(entries):
+    now = datetime.now(timezone.utc)
+    result = []
+    for entry in entries:
+        expires_at = entry.get("expiresAt")
+        if expires_at:
+            try:
+                expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if expiry <= now:
+                    continue
+            except ValueError:
+                continue
+        result.append(entry)
+    return result
+
+
+def apply_xray(entries, save_plan=True):
     if not isinstance(entries, list) or len(entries) > 200:
         raise ValueError("invalid_entries")
-    config = build_config(entries)
+    valid_entries = active_entries(entries)
+    config = build_config(valid_entries)
     encoded = json.dumps(config, ensure_ascii=False, sort_keys=True, indent=2).encode()
     os.makedirs(RUN_DIR, mode=0o700, exist_ok=True)
     staged = os.path.join(RUN_DIR, "xray-next.json")
@@ -110,7 +130,12 @@ def apply_xray(entries):
         if result.returncode != 0:
             message = (result.stderr or result.stdout or "xray_apply_failed").strip()[:240]
             return {"status": "rolled_back", "errorCode": "xray_apply_failed", "errorMessage": message}
-        return {"status": "applied", "sha256": hashlib.sha256(encoded).hexdigest(), "detail": (result.stdout or "").strip()[:240]}
+        if save_plan:
+            os.makedirs(os.path.dirname(PLAN_FILE), mode=0o700, exist_ok=True)
+            with open(PLAN_FILE, "w", encoding="utf-8") as handle:
+                json.dump(valid_entries, handle, ensure_ascii=False)
+            os.chmod(PLAN_FILE, 0o600)
+        return {"status": "applied", "activeEntries": len(valid_entries), "sha256": hashlib.sha256(encoded).hexdigest(), "detail": (result.stdout or "").strip()[:240]}
     finally:
         try:
             os.unlink(staged)
@@ -118,15 +143,35 @@ def apply_xray(entries):
             pass
 
 
+def expiry_reconciler():
+    last_plan = None
+    while True:
+        try:
+            if os.path.exists(PLAN_FILE):
+                with open(PLAN_FILE, encoding="utf-8") as handle:
+                    plan = json.load(handle)
+                active = active_entries(plan)
+                fingerprint = json.dumps(active, sort_keys=True)
+                if fingerprint != last_plan and len(active) != len(plan):
+                    result = apply_xray(active, save_plan=True)
+                    if result.get("status") == "applied":
+                        last_plan = fingerprint
+                else:
+                    last_plan = json.dumps(plan, sort_keys=True)
+        except Exception:
+            pass
+        time.sleep(30)
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ExitPanelAgent/0.2"
+    server_version = "ExitPanelAgent/0.3"
 
     def log_message(self, format, *args):
         return
 
     def do_GET(self):
         if self.path == "/health":
-            json_response(self, 200, {"ok": True, "service": "exitpanel-agent", "capabilities": ["socks5-check", "xray-atomic-apply", "rollback"]})
+            json_response(self, 200, {"ok": True, "service": "exitpanel-agent", "capabilities": ["socks5-check", "xray-atomic-apply", "rollback", "local-expiry-reconcile"]})
             return
         json_response(self, 404, {"error": "not_found"})
 
@@ -143,10 +188,7 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, 401, {"error": "unauthorized"})
                 return
             payload = json.loads(body)
-            if self.path == "/v1/check":
-                result = check_socks5(payload)
-            else:
-                result = apply_xray(payload.get("entries", []))
+            result = check_socks5(payload) if self.path == "/v1/check" else apply_xray(payload.get("entries", []))
             json_response(self, 200, result)
         except (ValueError, json.JSONDecodeError) as exc:
             json_response(self, 400, {"status": "failed", "errorCode": str(exc), "errorMessage": "请求参数无效"})
@@ -157,4 +199,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if not SHARED_SECRET:
         raise SystemExit("AGENT_SHARED_SECRET is required")
+    threading.Thread(target=expiry_reconciler, daemon=True).start()
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
