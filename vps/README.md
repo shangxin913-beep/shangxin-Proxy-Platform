@@ -2,6 +2,19 @@
 
 这个目录提供 VPS 数据面 worker。它不会把第三方 SOCKS5 的落地 IP 伪装成客户端入口；它负责在 VPS 上通过上游 SOCKS5 做真实 HTTPS 探测，并在配置好 Xray 后用 systemd 安全应用 VLESS/REALITY + SOCKS5 路由配置。
 
+## 一键部署管理面板和后端
+
+生产面板部署脚本面向 Debian/Ubuntu VPS，会安装 Docker、Docker Compose、MySQL 8.4、Nginx，并以 systemd 管理 Docker Compose。脚本会提示 `MANUS_PROJECT_ID` 和 `MANUS_JWT_SECRET`，数据库密码会自动生成并保存到 `/opt/exitpanel/.env.production`（权限 0600）。生产代码必须放在 VPS 可访问的 Git 仓库中，不能使用当前 Sandbox 的内部 Git 远端。
+
+```bash
+sudo bash vps/deploy-panel.sh \
+  --repo https://github.com/your-org/exitpanel.git \
+  --domain panel.example.com \
+  --email admin@example.com
+```
+
+域名的 DNS 必须先指向 VPS 公网 IP；脚本会尝试通过 Certbot 开启 HTTPS，失败时保留 HTTP 并打印警告。脚本只部署面板、API、数据库和 Nginx，不会自动开放 Xray/VLESS 公网端口；worker/Xray 仍需按下方安装器和安全边界单独部署。
+
 ## 安装
 
 在项目目录执行：
