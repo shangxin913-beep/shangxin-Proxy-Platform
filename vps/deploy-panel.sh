@@ -48,7 +48,7 @@ done
 [[ "$(id -u)" == "0" ]] || die "请使用 root 执行：sudo bash deploy-panel.sh ..."
 [[ "$APP_PORT" =~ ^[0-9]+$ ]] && (( APP_PORT >= 1024 && APP_PORT <= 65535 )) || die "EXITPANEL_APP_PORT 必须是 1024-65535"
 [[ -n "$REPO_URL" ]] || die "必须提供 --repo；生产 VPS 不能访问当前 Sandbox 的内部 Git 远端"
-command -v apt-get >/dev/null || die "当前脚本只支持 Debian/Ubuntu 系统"
+if command -v apt-get >/dev/null; then PKG_MGR=apt; elif command -v dnf >/dev/null; then PKG_MGR=dnf; else die "仅支持 Debian/Ubuntu 或 CentOS Stream/RHEL 系统"; fi
 if [[ -n "$DOMAIN" ]] && [[ ! "$DOMAIN" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ ]]; then
   die "--domain 不是有效域名"
 fi
@@ -90,13 +90,18 @@ if [[ -n "$DOMAIN" && -z "$ADMIN_EMAIL" ]]; then
   read -r -p "Let's Encrypt 邮箱（可留空跳过自动 HTTPS）: " ADMIN_EMAIL
 fi
 
-log "安装系统依赖和 Docker"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y --no-install-recommends ca-certificates curl git openssl nginx ufw docker.io
+log "安装系统依赖和 Docker（$PKG_MGR）"
+if [[ "$PKG_MGR" == apt ]]; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y --no-install-recommends ca-certificates curl git openssl nginx ufw docker.io
+else
+  dnf -y install ca-certificates curl git openssl nginx docker docker-compose-plugin firewalld
+  systemctl enable --now firewalld || true
+fi
 systemctl enable --now docker
 command -v docker >/dev/null || die "Docker 安装失败"
-if ! docker compose version >/dev/null 2>&1; then
+if ! docker compose version >/dev/null 2>&1 && [[ "$PKG_MGR" == apt ]]; then
   apt-get install -y --no-install-recommends docker-compose-v2 || apt-get install -y --no-install-recommends docker-compose-plugin || die "Docker Compose v2 安装失败"
 fi
 docker compose version >/dev/null || die "Docker Compose v2 安装失败"
@@ -114,6 +119,8 @@ else
 fi
 [[ -f "$SRC_DIR/Dockerfile" ]] || die "仓库中没有 Dockerfile：$SRC_DIR"
 [[ -f "$SRC_DIR/drizzle/0002_nervous_serpent_society.sql" || -d "$SRC_DIR/drizzle" ]] || die "仓库中没有 drizzle 迁移目录"
+install -m 0700 "$SRC_DIR/vps/panelctl.sh" /usr/local/sbin/exitpanel-panelctl
+ln -sfn /usr/local/sbin/exitpanel-panelctl /usr/local/sbin/panelctl
 
 cat >"$INSTALL_DIR/.env.production" <<EOF
 NODE_ENV=production
@@ -189,7 +196,7 @@ systemctl reload nginx
 
 if [[ -n "$DOMAIN" && -n "$ADMIN_EMAIL" ]]; then
   log "尝试申请 Let's Encrypt 证书"
-  apt-get install -y --no-install-recommends certbot python3-certbot-nginx
+  if [[ "$PKG_MGR" == apt ]]; then apt-get install -y --no-install-recommends certbot python3-certbot-nginx; else dnf -y install certbot python3-certbot-nginx || true; fi
   if certbot --nginx --non-interactive --agree-tos --redirect -m "$ADMIN_EMAIL" -d "$DOMAIN"; then
     log "HTTPS 已启用：https://$DOMAIN"
   else
@@ -205,6 +212,11 @@ if command -v ufw >/dev/null; then
   ufw allow 80/tcp >/dev/null || true
   [[ -n "$DOMAIN" && -n "$ADMIN_EMAIL" ]] && ufw allow 443/tcp >/dev/null || true
   ufw --force enable >/dev/null || true
+elif command -v firewall-cmd >/dev/null; then
+  firewall-cmd --permanent --add-service=ssh >/dev/null || true
+  firewall-cmd --permanent --add-service=http >/dev/null || true
+  [[ -n "$DOMAIN" && -n "$ADMIN_EMAIL" ]] && firewall-cmd --permanent --add-service=https >/dev/null || true
+  firewall-cmd --reload >/dev/null || true
 fi
 
 log "等待应用健康检查"

@@ -57,6 +57,12 @@ function simulatedResult(exit: Pick<SafeExit, "displayName" | "expectedCountry" 
   return { status: "passed", observedIp: ip, country, city: exit.expectedCity || (country === "泰国" ? "曼谷" : country === "墨西哥" ? "墨西哥城" : "VPS 直出"), latencyMs: latency, errorCode: undefined, errorMessage: undefined };
 }
 
+async function runConcurrent<T>(items: T[], concurrency: number, task: (item: T) => Promise<void>) {
+  let cursor = 0;
+  const worker = async () => { while (true) { const index = cursor++; if (index >= items.length) return; await task(items[index]); } };
+  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(items.length, 1)) }, worker));
+}
+
 export const appRouter = router({
   system: router({
     health: publicProcedure.query(() => ({ ok: true, mode: "preview-mock" as const })),
@@ -140,6 +146,18 @@ export const appRouter = router({
       const result = simulatedResult(exit);
       const checked = await setExitCheck(input.id, result);
       return checked;
+    }),
+    checkBatch: adminProcedure.input(z.object({ concurrency: z.coerce.number().int().min(1).max(20).default(4), ids: z.array(z.string()).max(500).optional() })).mutation(async ({ input }) => {
+      const all = await listExits() as SafeExit[];
+      const targets = input.ids?.length ? all.filter((exit) => input.ids?.includes(exit.id)) : all;
+      let passed = 0; let failed = 0;
+      await runConcurrent(targets, input.concurrency, async (exit) => {
+        if (exit.expiresAt && exit.expiresAt.getTime() <= Date.now()) { await updateExit(exit.id, { status: "expired" }); failed += 1; return; }
+        await updateExit(exit.id, { status: "checking" });
+        const checked = await setExitCheck(exit.id, simulatedResult(exit));
+        if (checked?.status === "passed") passed += 1; else failed += 1;
+      });
+      return { total: targets.length, passed, failed, concurrency: input.concurrency };
     }),
   }),
   subscriptions: router({

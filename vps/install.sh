@@ -20,6 +20,8 @@ if ((${#missing[@]})); then
   if command -v apt-get >/dev/null; then
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 curl ca-certificates openssl
+  elif command -v dnf >/dev/null; then
+    dnf -y install python3 curl ca-certificates openssl shadow-utils sudo
   else
     echo "缺少依赖：${missing[*]}；请先安装 python3、curl、ca-certificates 和 openssl" >&2
     exit 1
