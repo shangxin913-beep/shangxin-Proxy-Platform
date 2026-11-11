@@ -75,10 +75,10 @@ prompt_secret() {
 }
 
 prompt_value MANUS_PROJECT_ID "MANUS_PROJECT_ID（项目 ID）"
-prompt_secret MANUS_JWT_SECRET "MANUS_JWT_SECRET（OAuth 会话签名密钥）"
+MANUS_JWT_SECRET="${MANUS_JWT_SECRET:-$(openssl rand -hex 32 2>/dev/null || true)}"
+[[ -n "$MANUS_JWT_SECRET" ]] || die "无法生成 MANUS_JWT_SECRET，请安装 openssl 后重试"
 MANUS_OAUTH_API_URL="${MANUS_OAUTH_API_URL:-https://api.manus.ai}"
 MANUS_OAUTH_PORTAL_URL="${MANUS_OAUTH_PORTAL_URL:-https://manus.im}"
-[[ "$MANUS_JWT_SECRET" != "$MANUS_PROJECT_ID" ]] || die "MANUS_JWT_SECRET 不能填写项目 ID；请使用 Manus 项目的真实会话签名密钥"
 MYSQL_DATABASE="${MYSQL_DATABASE:-exitpanel}"
 MYSQL_USER="${MYSQL_USER:-exitpanel}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:-$(openssl rand -hex 24 2>/dev/null || true)}"
