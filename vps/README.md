@@ -4,7 +4,7 @@
 
 ## 一键部署管理面板和后端
 
-生产面板部署脚本面向 Debian/Ubuntu VPS，会安装 Docker、Docker Compose、MySQL 8.4、Nginx，并以 systemd 管理 Docker Compose。脚本会提示 `MANUS_PROJECT_ID` 和 `MANUS_JWT_SECRET`，数据库密码会自动生成并保存到 `/opt/exitpanel/.env.production`（权限 0600）。生产代码必须放在 VPS 可访问的 Git 仓库中，不能使用当前 Sandbox 的内部 Git 远端。
+生产面板部署脚本面向 Debian/Ubuntu VPS，会安装 Docker、Docker Compose、MySQL 8.4、Nginx，并以 systemd 管理 Docker Compose。脚本会提示 `MANUS_PROJECT_ID` 和 `MANUS_JWT_SECRET`，自动写入 `MANUS_OAUTH_PORTAL_URL=https://manus.im`，并在启动后检查公开配置中确实包含 OAuth 地址。`MANUS_JWT_SECRET` 不能填写项目 ID；数据库密码会自动生成并保存到 `/opt/exitpanel/.env.production`（权限 0600）。生产代码必须放在 VPS 可访问的 Git 仓库中，不能使用当前 Sandbox 的内部 Git 远端。
 
 ```bash
 sudo bash vps/deploy-panel.sh \

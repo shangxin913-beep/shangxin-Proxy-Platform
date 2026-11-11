@@ -77,6 +77,8 @@ prompt_secret() {
 prompt_value MANUS_PROJECT_ID "MANUS_PROJECT_ID（项目 ID）"
 prompt_secret MANUS_JWT_SECRET "MANUS_JWT_SECRET（OAuth 会话签名密钥）"
 MANUS_OAUTH_API_URL="${MANUS_OAUTH_API_URL:-https://api.manus.ai}"
+MANUS_OAUTH_PORTAL_URL="${MANUS_OAUTH_PORTAL_URL:-https://manus.im}"
+[[ "$MANUS_JWT_SECRET" != "$MANUS_PROJECT_ID" ]] || die "MANUS_JWT_SECRET 不能填写项目 ID；请使用 Manus 项目的真实会话签名密钥"
 MYSQL_DATABASE="${MYSQL_DATABASE:-exitpanel}"
 MYSQL_USER="${MYSQL_USER:-exitpanel}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:-$(openssl rand -hex 24 2>/dev/null || true)}"
@@ -120,6 +122,7 @@ APP_PORT=$APP_PORT
 MANUS_PROJECT_ID=$MANUS_PROJECT_ID
 MANUS_JWT_SECRET=$MANUS_JWT_SECRET
 MANUS_OAUTH_API_URL=$MANUS_OAUTH_API_URL
+MANUS_OAUTH_PORTAL_URL=$MANUS_OAUTH_PORTAL_URL
 OWNER_OPEN_ID=${OWNER_OPEN_ID:-}
 MYSQL_DATABASE=$MYSQL_DATABASE
 MYSQL_USER=$MYSQL_USER
@@ -216,6 +219,9 @@ curl -fsS --max-time 5 "http://127.0.0.1:$APP_PORT/api/health" >/dev/null || {
   docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail=80 app
   die "面板健康检查失败"
 }
+PUBLIC_CONFIG="$(curl -fsS --max-time 5 "http://127.0.0.1:$APP_PORT/api/platform/config.js")" || die "无法读取面板公开配置"
+grep -q 'oauthPortalUrl[^,]*https://manus\.im' <<<"$PUBLIC_CONFIG" || die "OAuth Portal 配置未进入面板，请检查 MANUS_OAUTH_PORTAL_URL"
+grep -q 'projectId[^,]*' <<<"$PUBLIC_CONFIG" || die "OAuth Project ID 未进入面板，请检查 MANUS_PROJECT_ID"
 
 chmod 0700 "$INSTALL_DIR"
 log "部署完成"
