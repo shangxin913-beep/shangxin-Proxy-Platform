@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
 import { getSessionCookieOptions } from "./_core/cookies";
-import { createExit, createNode, deleteExit, deleteNode, ensureSubscriptionToken, getExit, getNode, getNodeSecret, listChecks, listEvents, listExitPlans, listExits, listNodes, setExitCheck, updateExit, updateNode, type SafeExit } from "./db";
+import { authenticateLocalAdmin, changeLocalAdminPassword, createExit, createNode, deleteExit, deleteNode, ensureSubscriptionToken, getExit, getNode, getNodeSecret, listChecks, listEvents, listExitPlans, listExits, listNodes, setExitCheck, updateExit, updateNode, type SafeExit } from "./db";
 import { makeSubscription } from "./subscriptions";
 import { applyWorkerXray, workerHealth } from "./workerClient";
 
@@ -70,7 +70,23 @@ export const appRouter = router({
     }),
   }),
   auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
+    me: publicProcedure.query((opts) => {
+      if (!opts.ctx.user) return null;
+      const { passwordHash: _passwordHash, ...safeUser } = opts.ctx.user;
+      return safeUser;
+    }),
+    localLogin: publicProcedure.input(z.object({ username: z.string().trim().min(1).max(64), password: z.string().min(1).max(200) })).mutation(async ({ input, ctx }) => {
+      const user = await authenticateLocalAdmin(input.username, input.password);
+      if (!user) throw new TRPCError({ code: "UNAUTHORIZED", message: "用户名或密码错误" });
+      const token = await (await import("./_core/sdk")).sdk.createSessionToken(user.openId, { name: user.name || user.username || "管理员" });
+      ctx.res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(ctx.req), maxAge: 365 * 24 * 60 * 60 * 1000 });
+      return { ok: true, mustChangePassword: Boolean(user.passwordMustChange) };
+    }),
+    changeLocalPassword: adminProcedure.input(z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(8).max(200) })).mutation(async ({ input, ctx }) => {
+      const changed = await changeLocalAdminPassword(ctx.user.id, input.currentPassword, input.newPassword);
+      if (!changed) throw new TRPCError({ code: "BAD_REQUEST", message: "当前密码错误或不是本地管理员账户" });
+      return { ok: true };
+    }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });

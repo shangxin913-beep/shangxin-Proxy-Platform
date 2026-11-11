@@ -3,6 +3,9 @@ import { int, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-cor
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
   openId: varchar("openId", { length: 64 }).notNull().unique(),
+  username: varchar("username", { length: 64 }).unique(),
+  passwordHash: text("passwordHash"),
+  passwordMustChange: int("passwordMustChange").default(0).notNull(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
@@ -84,7 +87,3 @@ export const nodes = mysqlTable("nodes", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Exit = typeof exits.$inferSelect;
-export type InsertExit = typeof exits.$inferInsert;
-export type CheckRecord = typeof checkRecords.$inferSelect;
-export type StatusEvent = typeof statusEvents.$inferSelect;
-export type Node = typeof nodes.$inferSelect;

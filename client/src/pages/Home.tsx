@@ -154,7 +154,17 @@ function PathChip({ exit }: { exit: ExitRow }) {
 }
 
 function LoginView() {
-  return <div className="login-shell"><div className="login-card"><div className="brand-mark large"><span>EP</span></div><p className="eyebrow">EXITPANEL / PRIVATE CONTROL</p><h1>出口代理管理面板</h1><p>统一管理 VPS 入口、第三方 SOCKS5 出口和节点到期周期。实际出口与客户端入口始终分开记录。</p><Button size="lg" onClick={() => startLogin()}><KeyRound size={17} />使用 Manus 登录</Button><small>仅管理员可访问出口凭据、订阅和生命周期操作。</small></div></div>;
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("admin");
+  const loginMutation = trpc.auth.localLogin.useMutation({ onSuccess: () => window.location.reload() });
+  return <div className="login-shell"><div className="login-card"><div className="brand-mark large"><span>EP</span></div><p className="eyebrow">EXITPANEL / PRIVATE CONTROL</p><h1>出口代理管理面板</h1><p>统一管理 VPS 入口、第三方 SOCKS5 出口和节点到期周期。实际出口与客户端入口始终分开记录。</p><form className="form-body" onSubmit={(event) => { event.preventDefault(); loginMutation.mutate({ username, password }); }}><label>管理员用户名<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" /></label><label>管理员密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" /></label><Button size="lg" type="submit" disabled={loginMutation.isPending}><KeyRound size={17} />{loginMutation.isPending ? "登录中…" : "本地管理员登录"}</Button></form><div className="login-divider">或</div><Button size="lg" variant="outline" onClick={() => startLogin()}><ExternalLink size={17} />使用 Manus 登录</Button><small>首次本地登录：用户名 admin，密码 admin。登录后请立即修改密码。</small></div></div>;
+}
+
+function ChangePasswordView({ user, onDone }: { user: { id: number }; onDone: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState("admin");
+  const [newPassword, setNewPassword] = useState("");
+  const mutation = trpc.auth.changeLocalPassword.useMutation({ onSuccess: () => { toast.success("密码已更新"); onDone(); } });
+  return <div className="login-shell"><div className="login-card"><div className="brand-mark large"><span>EP</span></div><p className="eyebrow">SECURITY / FIRST LOGIN</p><h1>请修改管理员密码</h1><p>首次使用默认密码登录后，必须设置至少 8 位的新密码。</p><form className="form-body" onSubmit={(event) => { event.preventDefault(); mutation.mutate({ currentPassword, newPassword }); }}><label>当前密码<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>新密码<input type="password" minLength={8} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="至少 8 位" /></label><Button size="lg" type="submit" disabled={mutation.isPending || newPassword.length < 8}><ShieldCheck size={17} />保存新密码</Button></form></div></div>;
 }
 
 export default function Home() {
@@ -197,6 +207,7 @@ export default function Home() {
 
   if (auth.loading) return <div className="loading-screen"><RefreshCw className="spin" />正在读取管理员会话…</div>;
   if (!auth.user) return <LoginView />;
+  if (auth.user.passwordMustChange) return <ChangePasswordView user={auth.user} onDone={() => auth.refresh()} />;
   if (auth.user.role !== "admin") return <div className="loading-screen"><CircleAlert /><div><strong>当前账号没有管理员权限</strong><p>请使用项目所有者账号登录，或者为当前用户分配 admin 角色。</p></div></div>;
 
   function openCreate() {

@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { decryptSecret, encryptSecret } from "./crypto";
 import { checkRecords, exits, InsertUser, nodes, statusEvents, users, type Exit } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import { hashLocalPassword, verifyLocalPassword } from "./localAuth";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -61,6 +62,36 @@ export async function getUserByOpenId(openId: string) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
   return result[0];
+}
+
+
+const LOCAL_ADMIN_OPEN_ID = "local_admin";
+
+export async function authenticateLocalAdmin(username: string, password: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  let result = await db.select().from(users).where(eq(users.username, username)).limit(1);
+  if (result.length === 0 && username === "admin") {
+    await db.insert(users).values({
+      openId: LOCAL_ADMIN_OPEN_ID, username: "admin", passwordHash: hashLocalPassword("admin"),
+      passwordMustChange: 1, name: "管理员", loginMethod: "local", role: "admin", lastSignedIn: new Date(),
+    });
+    result = await db.select().from(users).where(eq(users.username, username)).limit(1);
+  }
+  const user = result[0];
+  if (!user || user.role !== "admin" || !verifyLocalPassword(password, user.passwordHash)) return null;
+  await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, user.id));
+  return user;
+}
+
+export async function changeLocalAdminPassword(userId: number, currentPassword: string, newPassword: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const result = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const user = result[0];
+  if (!user || user.loginMethod !== "local" || !verifyLocalPassword(currentPassword, user.passwordHash)) return false;
+  await db.update(users).set({ passwordHash: hashLocalPassword(newPassword), passwordMustChange: 0 }).where(eq(users.id, userId));
+  return true;
 }
 
 export async function ensureSubscriptionToken(userId: number) {
