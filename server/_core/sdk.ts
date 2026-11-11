@@ -322,7 +322,9 @@ class SDKServer {
       lastSignedIn: signedInAt,
     });
 
-    return user;
+    // upsertUser may bootstrap the first signed-in user as admin; reload so
+    // this request receives the effective role instead of the stale record.
+    return (await db.getUserByOpenId(user.openId)) ?? user;
   }
 }
 

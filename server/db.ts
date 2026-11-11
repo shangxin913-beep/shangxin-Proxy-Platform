@@ -44,6 +44,12 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   } else if (user.openId === ENV.ownerOpenId) {
     values.role = "admin";
     updateSet.role = "admin";
+  } else if (!ENV.ownerOpenId) {
+    const existingAdmin = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin")).limit(1);
+    if (existingAdmin.length === 0) {
+      values.role = "admin";
+      updateSet.role = "admin";
+    }
   }
   if (!values.lastSignedIn) values.lastSignedIn = new Date();
   if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
